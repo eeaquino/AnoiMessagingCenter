@@ -63,7 +63,17 @@ internal sealed class SyncSubscription<TSender, TArgs> : Subscription, ISubscrip
         : base(subscriber, message, source)
         => _callback = callback;
 
-    public void Invoke(TSender sender, TArgs args) => _callback(sender, args);
+    public void Invoke(TSender sender, TArgs args)
+    {
+        try
+        {
+            _callback(sender, args);
+        }
+        catch (Exception exception)
+        {
+            MessagingCenter.RaiseCallbackFailed(exception, Message);
+        }
+    }
 }
 
 internal sealed class SyncSubscription<TSender> : Subscription, ISubscription<TSender>
@@ -74,7 +84,17 @@ internal sealed class SyncSubscription<TSender> : Subscription, ISubscription<TS
         : base(subscriber, message, source)
         => _callback = callback;
 
-    public void Invoke(TSender sender) => _callback(sender);
+    public void Invoke(TSender sender)
+    {
+        try
+        {
+            _callback(sender);
+        }
+        catch (Exception exception)
+        {
+            MessagingCenter.RaiseCallbackFailed(exception, Message);
+        }
+    }
 }
 
 internal sealed class AsyncSubscription<TSender, TArgs> : Subscription, ISubscription<TSender, TArgs>
@@ -89,7 +109,14 @@ internal sealed class AsyncSubscription<TSender, TArgs> : Subscription, ISubscri
 
     private async Task InvokeAsync(TSender sender, TArgs args)
     {
-        await _callback(sender, args);
+        try
+        {
+            await _callback(sender, args);
+        }
+        catch (Exception exception)
+        {
+            MessagingCenter.RaiseCallbackFailed(exception, Message);
+        }
     }
 }
 
@@ -105,6 +132,13 @@ internal sealed class AsyncSubscription<TSender> : Subscription, ISubscription<T
 
     private async Task InvokeAsync(TSender sender)
     {
-        await _callback(sender);
+        try
+        {
+            await _callback(sender);
+        }
+        catch (Exception exception)
+        {
+            MessagingCenter.RaiseCallbackFailed(exception, Message);
+        }
     }
 }
