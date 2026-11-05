@@ -21,6 +21,7 @@
 - `Send` must allocate 0 bytes in steady state, including with struct `TArgs`.
 - Tests must pass in Release (`dotnet test -c Release`). Static event tests require disabled test parallelization.
 - Use `System.Threading.Lock` and `lock` statements; never invoke callbacks while holding `_sync`.
+- Explicit interface implementations of `Subscribe`/`SubscribeAsync` cannot restate `where TSender : class` (CS0460). Wrap those four explicit implementations in `#nullable disable`/`#nullable restore` and declare their `source` parameter as `TSender source`; static methods keep `TSender?`.
 - Commit after every task with a conventional message.
 
 ---
@@ -355,9 +356,9 @@ public class ApiShapeTests
             {
                 "Send/1/2",
                 "Send/2/3",
-                "Subscribe/1/3",
+                "Subscribe/1/4",
                 "Subscribe/2/4",
-                "SubscribeAsync/1/3",
+                "SubscribeAsync/1/4",
                 "SubscribeAsync/2/4",
                 "Unsubscribe/1/2",
                 "Unsubscribe/2/2",
@@ -388,9 +389,9 @@ public class ApiShapeTests
             {
                 "Send/1/2",
                 "Send/2/3",
-                "Subscribe/1/3",
+                "Subscribe/1/4",
                 "Subscribe/2/4",
-                "SubscribeAsync/1/3",
+                "SubscribeAsync/1/4",
                 "SubscribeAsync/2/4",
                 "Unsubscribe/1/2",
                 "Unsubscribe/2/2",
@@ -2999,3 +3000,4 @@ Do not commit `artifacts/PackageSmoke` or the `.nupkg` files; `.gitignore` exclu
 No placeholders remain. Public method types and names are consistent across tasks: `SendCore`, `SubscribeCore`,
 `SubscribeAsyncCore`, `UnsubscribeCore`, `Append`, `DetachAnchor`, `Prune`, `ClearAll`,
 `GetSubscriptionCount`, `RaiseCallbackFailed`.
+
