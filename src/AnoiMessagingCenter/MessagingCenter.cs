@@ -1,4 +1,5 @@
 using AnoiMessagingCenter.Internal;
+using System.Runtime.CompilerServices;
 
 namespace AnoiMessagingCenter;
 
@@ -8,7 +9,8 @@ public class MessagingCenter : IMessagingCenter
     private static readonly Lazy<MessagingCenter> _instance = new(() => new MessagingCenter());
 
     private readonly Lock _sync = new();
-    private readonly Dictionary<MessageKey, Subscription[]> _subscriptions = new();
+    private readonly Dictionary<MessageKey, WeakReference<Subscription>[]> _subscriptions = new();
+    private readonly ConditionalWeakTable<object, List<Subscription>> _anchors = new();
 
     /// <summary>Gets the shared lazy singleton used by the static members.</summary>
     public static IMessagingCenter Instance => _instance.Value;
@@ -114,7 +116,7 @@ public class MessagingCenter : IMessagingCenter
         ArgumentNullException.ThrowIfNull(message);
 
         var key = new MessageKey(message, typeof(TSender), typeof(TArgs));
-        Subscription[] snapshot;
+        WeakReference<Subscription>[] snapshot;
 
         lock (_sync)
         {
@@ -124,8 +126,11 @@ public class MessagingCenter : IMessagingCenter
             snapshot = current;
         }
 
-        foreach (var subscription in snapshot)
+        foreach (var weakSubscription in snapshot)
         {
+            if (!weakSubscription.TryGetTarget(out var subscription))
+                continue;
+
             if (!subscription.CanInvoke(sender))
                 continue;
 
@@ -140,7 +145,7 @@ public class MessagingCenter : IMessagingCenter
         ArgumentNullException.ThrowIfNull(message);
 
         var key = new MessageKey(message, typeof(TSender), null);
-        Subscription[] snapshot;
+        WeakReference<Subscription>[] snapshot;
 
         lock (_sync)
         {
@@ -150,8 +155,11 @@ public class MessagingCenter : IMessagingCenter
             snapshot = current;
         }
 
-        foreach (var subscription in snapshot)
+        foreach (var weakSubscription in snapshot)
         {
+            if (!weakSubscription.TryGetTarget(out var subscription))
+                continue;
+
             if (!subscription.CanInvoke(sender))
                 continue;
 
@@ -174,6 +182,7 @@ public class MessagingCenter : IMessagingCenter
         lock (_sync)
         {
             _subscriptions[key] = Append(_subscriptions.GetValueOrDefault(key), subscription);
+            _anchors.GetOrCreateValue(subscriber).Add(subscription);
         }
     }
 
@@ -191,6 +200,7 @@ public class MessagingCenter : IMessagingCenter
         lock (_sync)
         {
             _subscriptions[key] = Append(_subscriptions.GetValueOrDefault(key), subscription);
+            _anchors.GetOrCreateValue(subscriber).Add(subscription);
         }
     }
 
@@ -206,29 +216,13 @@ public class MessagingCenter : IMessagingCenter
             if (!_subscriptions.TryGetValue(key, out var subscriptions))
                 return;
 
-            var kept = new List<Subscription>(subscriptions.Length);
-
-            foreach (var subscription in subscriptions)
-            {
-                if (subscription.IsRemoved)
-                    continue;
-
-                if (subscription.SubscriberIs(subscriber))
-                {
-                    subscription.MarkRemoved();
-                    continue;
-                }
-
-                kept.Add(subscription);
-            }
-
-            if (kept.Count == subscriptions.Length)
+            if (!TryRemoveSubscriptions(subscriptions, subscriber, out var kept))
                 return;
 
-            if (kept.Count == 0)
+            if (kept.Length == 0)
                 _subscriptions.Remove(key);
             else
-                _subscriptions[key] = kept.ToArray();
+                _subscriptions[key] = kept;
         }
     }
 
@@ -244,30 +238,70 @@ public class MessagingCenter : IMessagingCenter
             if (!_subscriptions.TryGetValue(key, out var subscriptions))
                 return;
 
-            var kept = new List<Subscription>(subscriptions.Length);
-
-            foreach (var subscription in subscriptions)
-            {
-                if (subscription.IsRemoved)
-                    continue;
-
-                if (subscription.SubscriberIs(subscriber))
-                {
-                    subscription.MarkRemoved();
-                    continue;
-                }
-
-                kept.Add(subscription);
-            }
-
-            if (kept.Count == subscriptions.Length)
+            if (!TryRemoveSubscriptions(subscriptions, subscriber, out var kept))
                 return;
 
-            if (kept.Count == 0)
+            if (kept.Length == 0)
                 _subscriptions.Remove(key);
             else
-                _subscriptions[key] = kept.ToArray();
+                _subscriptions[key] = kept;
         }
+    }
+
+    private bool TryRemoveSubscriptions(
+        WeakReference<Subscription>[] subscriptions, object subscriber, out WeakReference<Subscription>[] kept)
+    {
+        var survivors = new List<WeakReference<Subscription>>(subscriptions.Length);
+        List<Subscription>? removed = null;
+        var changed = false;
+
+        foreach (var weakSubscription in subscriptions)
+        {
+            if (!weakSubscription.TryGetTarget(out var subscription))
+            {
+                changed = true;
+                continue;
+            }
+
+            if (subscription.IsRemoved)
+            {
+                changed = true;
+                continue;
+            }
+
+            if (subscription.SubscriberIs(subscriber))
+            {
+                subscription.MarkRemoved();
+                (removed ??= new List<Subscription>()).Add(subscription);
+                changed = true;
+                continue;
+            }
+
+            survivors.Add(weakSubscription);
+        }
+
+        if (removed is not null)
+        {
+            foreach (var subscription in removed)
+                DetachAnchor(subscription);
+        }
+
+        kept = survivors.ToArray();
+        return changed;
+    }
+
+    private void DetachAnchor(Subscription subscription)
+    {
+        if (!subscription.TryGetSubscriber(out var owner))
+            return;
+
+        if (!_anchors.TryGetValue(owner, out var anchored))
+            return;
+
+        anchored.Remove(subscription);
+
+        if (anchored.Count == 0)
+            _anchors.Remove(owner);
     }
 
     private void SubscribeAsyncCore<TSender, TArgs>(
@@ -284,6 +318,7 @@ public class MessagingCenter : IMessagingCenter
         lock (_sync)
         {
             _subscriptions[key] = Append(_subscriptions.GetValueOrDefault(key), subscription);
+            _anchors.GetOrCreateValue(subscriber).Add(subscription);
         }
     }
 
@@ -301,6 +336,7 @@ public class MessagingCenter : IMessagingCenter
         lock (_sync)
         {
             _subscriptions[key] = Append(_subscriptions.GetValueOrDefault(key), subscription);
+            _anchors.GetOrCreateValue(subscriber).Add(subscription);
         }
     }
 
@@ -309,17 +345,21 @@ public class MessagingCenter : IMessagingCenter
         lock (_sync)
         {
             _subscriptions.Clear();
+            _anchors.Clear();
         }
     }
 
-    private static Subscription[] Append(Subscription[]? existing, Subscription subscription)
+    private static WeakReference<Subscription>[] Append(
+        WeakReference<Subscription>[]? existing, Subscription subscription)
     {
-        if (existing is null || existing.Length == 0)
-            return new[] { subscription };
+        var reference = new WeakReference<Subscription>(subscription);
 
-        var result = new Subscription[existing.Length + 1];
+        if (existing is null || existing.Length == 0)
+            return new[] { reference };
+
+        var result = new WeakReference<Subscription>[existing.Length + 1];
         Array.Copy(existing, result, existing.Length);
-        result[^1] = subscription;
+        result[^1] = reference;
         return result;
     }
 }
