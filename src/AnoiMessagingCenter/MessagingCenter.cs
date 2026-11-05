@@ -44,13 +44,13 @@ public class MessagingCenter : IMessagingCenter
     public static void SubscribeAsync<TSender, TArgs>(
         object subscriber, string message, Func<TSender, TArgs, Task> asyncCallback, TSender? source = null)
         where TSender : class
-        => throw new NotImplementedException();
+        => Default.SubscribeAsyncCore(subscriber, message, asyncCallback, source);
 
     /// <summary>Subscribes an asynchronous callback that receives only the sender.</summary>
     public static void SubscribeAsync<TSender>(
         object subscriber, string message, Func<TSender, Task> asyncCallback, TSender? source = null)
         where TSender : class
-        => throw new NotImplementedException();
+        => Default.SubscribeAsyncCore(subscriber, message, asyncCallback, source);
 
     /// <summary>Removes all subscriptions for the subscriber, message, and exact sender/argument types.</summary>
     public static void Unsubscribe<TSender, TArgs>(object subscriber, string message) where TSender : class
@@ -77,11 +77,11 @@ public class MessagingCenter : IMessagingCenter
 
     void IMessagingCenter.SubscribeAsync<TSender, TArgs>(
         object subscriber, string message, Func<TSender, TArgs, Task> asyncCallback, TSender source)
-        => throw new NotImplementedException();
+        => SubscribeAsyncCore(subscriber, message, asyncCallback, source);
 
     void IMessagingCenter.SubscribeAsync<TSender>(
         object subscriber, string message, Func<TSender, Task> asyncCallback, TSender source)
-        => throw new NotImplementedException();
+        => SubscribeAsyncCore(subscriber, message, asyncCallback, source);
 #nullable restore
 
     void IMessagingCenter.Unsubscribe<TSender, TArgs>(object subscriber, string message)
@@ -267,6 +267,40 @@ public class MessagingCenter : IMessagingCenter
                 _subscriptions.Remove(key);
             else
                 _subscriptions[key] = kept.ToArray();
+        }
+    }
+
+    private void SubscribeAsyncCore<TSender, TArgs>(
+        object subscriber, string message, Func<TSender, TArgs, Task> asyncCallback, TSender? source)
+        where TSender : class
+    {
+        ArgumentNullException.ThrowIfNull(subscriber);
+        ArgumentNullException.ThrowIfNull(asyncCallback);
+        ArgumentNullException.ThrowIfNull(message);
+
+        var key = new MessageKey(message, typeof(TSender), typeof(TArgs));
+        var subscription = new AsyncSubscription<TSender, TArgs>(subscriber, message, source, asyncCallback);
+
+        lock (_sync)
+        {
+            _subscriptions[key] = Append(_subscriptions.GetValueOrDefault(key), subscription);
+        }
+    }
+
+    private void SubscribeAsyncCore<TSender>(
+        object subscriber, string message, Func<TSender, Task> asyncCallback, TSender? source)
+        where TSender : class
+    {
+        ArgumentNullException.ThrowIfNull(subscriber);
+        ArgumentNullException.ThrowIfNull(asyncCallback);
+        ArgumentNullException.ThrowIfNull(message);
+
+        var key = new MessageKey(message, typeof(TSender), null);
+        var subscription = new AsyncSubscription<TSender>(subscriber, message, source, asyncCallback);
+
+        lock (_sync)
+        {
+            _subscriptions[key] = Append(_subscriptions.GetValueOrDefault(key), subscription);
         }
     }
 

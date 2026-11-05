@@ -76,3 +76,35 @@ internal sealed class SyncSubscription<TSender> : Subscription, ISubscription<TS
 
     public void Invoke(TSender sender) => _callback(sender);
 }
+
+internal sealed class AsyncSubscription<TSender, TArgs> : Subscription, ISubscription<TSender, TArgs>
+{
+    private readonly Func<TSender, TArgs, Task> _callback;
+
+    internal AsyncSubscription(object subscriber, string message, object? source, Func<TSender, TArgs, Task> callback)
+        : base(subscriber, message, source)
+        => _callback = callback;
+
+    public void Invoke(TSender sender, TArgs args) => _ = InvokeAsync(sender, args);
+
+    private async Task InvokeAsync(TSender sender, TArgs args)
+    {
+        await _callback(sender, args);
+    }
+}
+
+internal sealed class AsyncSubscription<TSender> : Subscription, ISubscription<TSender>
+{
+    private readonly Func<TSender, Task> _callback;
+
+    internal AsyncSubscription(object subscriber, string message, object? source, Func<TSender, Task> callback)
+        : base(subscriber, message, source)
+        => _callback = callback;
+
+    public void Invoke(TSender sender) => _ = InvokeAsync(sender);
+
+    private async Task InvokeAsync(TSender sender)
+    {
+        await _callback(sender);
+    }
+}
