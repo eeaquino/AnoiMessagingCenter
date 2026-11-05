@@ -215,4 +215,48 @@ public class MessagingCenterTests : TestBase
         Assert.Equal(1, calls);
         GC.KeepAlive(subscriber);
     }
+
+    [Fact]
+    public void ClearSubscribers_StopsDelivery()
+    {
+        var calls = 0;
+        var subscriber = new object();
+        MessagingCenter.Subscribe<Sender, Args>(subscriber, "clear", (_, _) => calls++);
+
+        MessagingCenter.ClearSubscribers();
+        MessagingCenter.Send(new Sender(), "clear", new Args());
+
+        Assert.Equal(0, calls);
+        GC.KeepAlive(subscriber);
+    }
+
+    [Fact]
+    public void DeadSubscriptions_ArePrunedDuringSend()
+    {
+        var subscriber = CreateDeadSubscriber("prune");
+        AssertCollected(subscriber);
+
+        MessagingCenter.Send(new Sender(), "prune", new Args());
+
+        Assert.Equal(0, MessagingCenter.GetSubscriptionCount("prune", typeof(Sender), typeof(Args)));
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static WeakReference CreateDeadSubscriber(string message)
+    {
+        var subscriber = new object();
+        MessagingCenter.Subscribe<Sender, Args>(subscriber, message, static (_, _) => { });
+        return new WeakReference(subscriber);
+    }
+
+    private static void AssertCollected(WeakReference reference)
+    {
+        for (var attempt = 0; attempt < 10 && reference.IsAlive; attempt++)
+        {
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+        }
+
+        Assert.False(reference.IsAlive);
+    }
 }

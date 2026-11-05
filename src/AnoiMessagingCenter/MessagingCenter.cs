@@ -94,6 +94,9 @@ public class MessagingCenter : IMessagingCenter
 
     internal static void ClearSubscribers() => Default.ClearAll();
 
+    internal static int GetSubscriptionCount(string message, Type senderType, Type? argType)
+        => Default.CountSubscriptions(new MessageKey(message, senderType, argType));
+
     internal static void RaiseCallbackFailed(Exception exception, string message)
     {
         var handler = CallbackFailed;
@@ -126,10 +129,27 @@ public class MessagingCenter : IMessagingCenter
             snapshot = current;
         }
 
+        var stale = false;
+
         foreach (var weakSubscription in snapshot)
         {
             if (!weakSubscription.TryGetTarget(out var subscription))
+            {
+                stale = true;
                 continue;
+            }
+
+            if (subscription.IsRemoved)
+            {
+                stale = true;
+                continue;
+            }
+
+            if (!subscription.IsSubscriberAlive)
+            {
+                stale = true;
+                continue;
+            }
 
             if (!subscription.CanInvoke(sender))
                 continue;
@@ -137,6 +157,9 @@ public class MessagingCenter : IMessagingCenter
             if (subscription is ISubscription<TSender, TArgs> typed)
                 typed.Invoke(sender, args);
         }
+
+        if (stale)
+            Prune(key, snapshot);
     }
 
     private void SendCore<TSender>(TSender sender, string message) where TSender : class
@@ -155,10 +178,27 @@ public class MessagingCenter : IMessagingCenter
             snapshot = current;
         }
 
+        var stale = false;
+
         foreach (var weakSubscription in snapshot)
         {
             if (!weakSubscription.TryGetTarget(out var subscription))
+            {
+                stale = true;
                 continue;
+            }
+
+            if (subscription.IsRemoved)
+            {
+                stale = true;
+                continue;
+            }
+
+            if (!subscription.IsSubscriberAlive)
+            {
+                stale = true;
+                continue;
+            }
 
             if (!subscription.CanInvoke(sender))
                 continue;
@@ -166,6 +206,9 @@ public class MessagingCenter : IMessagingCenter
             if (subscription is ISubscription<TSender> typed)
                 typed.Invoke(sender);
         }
+
+        if (stale)
+            Prune(key, snapshot);
     }
 
     private void SubscribeCore<TSender, TArgs>(
@@ -346,6 +389,58 @@ public class MessagingCenter : IMessagingCenter
         {
             _subscriptions.Clear();
             _anchors.Clear();
+        }
+    }
+
+    private int CountSubscriptions(MessageKey key)
+    {
+        lock (_sync)
+        {
+            return _subscriptions.TryGetValue(key, out var subscriptions) ? subscriptions.Length : 0;
+        }
+    }
+
+    private void Prune(MessageKey key, WeakReference<Subscription>[] observed)
+    {
+        lock (_sync)
+        {
+            if (!_subscriptions.TryGetValue(key, out var current) || !ReferenceEquals(current, observed))
+                return;
+
+            var survivors = new List<WeakReference<Subscription>>(current.Length);
+            var changed = false;
+
+            foreach (var weakSubscription in current)
+            {
+                if (!weakSubscription.TryGetTarget(out var subscription))
+                {
+                    changed = true;
+                    continue;
+                }
+
+                if (subscription.IsRemoved)
+                {
+                    changed = true;
+                    continue;
+                }
+
+                if (!subscription.IsSubscriberAlive)
+                {
+                    subscription.MarkRemoved();
+                    changed = true;
+                    continue;
+                }
+
+                survivors.Add(weakSubscription);
+            }
+
+            if (!changed)
+                return;
+
+            if (survivors.Count == 0)
+                _subscriptions.Remove(key);
+            else
+                _subscriptions[key] = survivors.ToArray();
         }
     }
 
